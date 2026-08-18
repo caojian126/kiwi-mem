@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-补丁脚本 v3：合并客户端 tools + 修复每日整理 created_at bug。
+补丁脚本 v4：合并客户端 tools + 修复每日整理两个 bug。
 在 Docker 构建时自动执行（Dockerfile 里 RUN python patch_main.py）。
 
-v3 变更：
+v4 变更：
 1. 继承 v2 的客户端工具合并逻辑（流式/非流式都处理）
-2. 新增：修复 daily_digest.py 的 created_at 字符串 bug
+2. 修复 daily_digest.py created_at 字符串 → datetime 对象
+3. 修复 daily_digest.py choices=None 导致 'NoneType' object is not subscriptable
 """
 
 import os
@@ -111,7 +112,7 @@ else:
 
 
 # ============================================================
-# 补丁2：daily_digest.py — 修复 created_at 字符串 bug
+# 补丁2：daily_digest.py — 修复 created_at + choices=None
 # ============================================================
 
 DIGEST_PY = "/app/daily_digest.py"
@@ -120,22 +121,37 @@ if os.path.exists(DIGEST_PY):
     with open(DIGEST_PY, "r", encoding="utf-8") as f:
         digest_code = f.read()
 
+    # ---- 修复1：created_at 字符串 → datetime 对象 ----
     if "fix_created_at_str" not in digest_code:
-        # 把字符串 f"{date_str}T00:00:00+08:00" 替换为 datetime 对象
         old3 = '''                f"{date_str}T00:00:00+08:00", cat_id'''
 
         new3 = '''                datetime.strptime(date_str + "T00:00:00+08:00", "%Y-%m-%dT%H:%M:%S%z"), cat_id  # fix_created_at_str'''
 
-        if old3 not in digest_code:
-            print("patch: WARNING - cannot find daily_digest.py insertion point, skipping this fix")
-        else:
+        if old3 in digest_code:
             digest_code = digest_code.replace(old3, new3, 1)
-            with open(DIGEST_PY, "w", encoding="utf-8") as f:
-                f.write(digest_code)
-            print("patch: daily_digest.py patched successfully (created_at fix)")
-    else:
-        print("patch: daily_digest.py already patched, skipping")
+            print("patch: daily_digest.py created_at fix applied")
+        else:
+            print("patch: WARNING - cannot find daily_digest.py created_at insertion point")
+
+    # ---- 修复2：choices=None 导致 'NoneType' object is not subscriptable ----
+    # 原代码：data.get("choices", [{}])[0] — 如果 choices 键存在但值为 None，
+    # .get() 返回 None 而非默认值 [{}]，None[0] 就会报错。
+    # 修复：用 (data.get("choices") or [{}])[0] 兜底。
+    if "fix_choices_none" not in digest_code:
+        old4 = 'text = data.get("choices", [{}])[0].get("message", {}).get("content", "")'
+
+        new4 = 'text = (data.get("choices") or [{}])[0].get("message", {}) if (data.get("choices") or [{}])[0] and isinstance((data.get("choices") or [{}])[0], dict) else {};\n            text = text.get("content", "") if isinstance(text, dict) else ""  # fix_choices_none'
+
+        if old4 in digest_code:
+            digest_code = digest_code.replace(old4, new4, 1)
+            print("patch: daily_digest.py choices=None fix applied")
+        else:
+            print("patch: WARNING - cannot find daily_digest.py choices insertion point")
+
+    with open(DIGEST_PY, "w", encoding="utf-8") as f:
+        f.write(digest_code)
+    print("patch: daily_digest.py patched successfully")
 else:
-    print("patch: WARNING - daily_digest.py not found, skipping this fix")
+    print("patch: WARNING - daily_digest.py not found, skipping")
 
 print("patch: all done")
