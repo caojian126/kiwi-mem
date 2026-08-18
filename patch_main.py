@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-补丁脚本 v4：合并客户端 tools + 修复每日整理两个 bug。
+补丁脚本 v5：合并客户端 tools + 修复每日整理 + 日页面回退读 conversations 表。
 在 Docker 构建时自动执行（Dockerfile 里 RUN python patch_main.py）。
 
-v4 变更：
-1. 继承 v2 的客户端工具合并逻辑（流式/非流式都处理）
-2. 修复 daily_digest.py created_at 字符串 → datetime 对象
-3. 修复 daily_digest.py choices=None 导致 'NoneType' object is not subscriptable
+v5 变更：
+1. 继承 v2-v4 全部修复
+2. 新增：日页面生成在 chat_messages 表为空时回退读 conversations 表
+   （不支持云端同步的 App 也能生成日页面）
 """
 
 import os
@@ -22,7 +22,6 @@ if os.path.exists(MAIN_PY):
         code = f.read()
 
     if "client_passthrough" not in code:
-        # ---- 编辑1：合并客户端 tools ----
         old1 = '    # ========== Tool Call 模式（MCP 和/或 auto 搜索） ==========\n    if openai_tools and is_stream:'
 
         new1 = '''    # ========== 合并客户端原始 tools ==========
@@ -44,7 +43,6 @@ if os.path.exists(MAIN_PY):
             exit(1)
         code = code.replace(old1, new1, 1)
 
-        # ---- 编辑2a：工具分组加入 client_passthrough ----
         old2a = '        mcp_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") not in ("gateway_builtin", "drawer", "meta", "external_mcp")]'
 
         new2a = '''        client_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") == "client_passthrough"]
@@ -55,7 +53,6 @@ if os.path.exists(MAIN_PY):
             exit(1)
         code = code.replace(old2a, new2a, 1)
 
-        # ---- 编辑2b：客户端工具调用处理 ----
         old2b = '        approved_categories = set()  # request-local; never infer from shared session state'
 
         new2b = '''        approved_categories = set()  # request-local; never infer from shared session state
@@ -134,9 +131,6 @@ if os.path.exists(DIGEST_PY):
             print("patch: WARNING - cannot find daily_digest.py created_at insertion point")
 
     # ---- 修复2：choices=None 导致 'NoneType' object is not subscriptable ----
-    # 原代码：data.get("choices", [{}])[0] — 如果 choices 键存在但值为 None，
-    # .get() 返回 None 而非默认值 [{}]，None[0] 就会报错。
-    # 修复：用 (data.get("choices") or [{}])[0] 兜底。
     if "fix_choices_none" not in digest_code:
         old4 = 'text = data.get("choices", [{}])[0].get("message", {}).get("content", "")'
 
@@ -153,5 +147,62 @@ if os.path.exists(DIGEST_PY):
     print("patch: daily_digest.py patched successfully")
 else:
     print("patch: WARNING - daily_digest.py not found, skipping")
+
+
+# ============================================================
+# 补丁3：database.py — 日页面回退读 conversations 表
+# 不支持云端同步的 App 不会写 chat_messages 表，
+# 日页面生成读不到数据就会一直跳过。
+# 补丁：chat_messages 查询为空时，回退读 conversations 事件账本表。
+# ============================================================
+
+DB_PY = "/app/database.py"
+
+if os.path.exists(DB_PY):
+    with open(DB_PY, "r", encoding="utf-8") as f:
+        db_code = f.read()
+
+    if "fix_daypage_fallback" not in db_code:
+        # 匹配 get_chat_messages_for_date 函数末尾：查询返回空时不回退，直接返回空列表
+        # 在 return 前插入回退逻辑
+        old5 = '''              AND c.project_id IS NULL
+            ORDER BY m.time ASC
+        """, d)
+    return [dict(r) for r in rows]'''
+
+        new5 = '''              AND c.project_id IS NULL
+            ORDER BY m.time ASC
+        """, d)
+
+    # fix_daypage_fallback: chat_messages 表为空时回退读 conversations 事件账本
+    if not rows:
+        rows = await conn.fetch("""
+            SELECT c.role, c.content, c.created_at AS time, c.session_id AS conversation_id,
+                   COALESCE(r.rev, 0) AS source_rev,
+                   (SELECT reset_generation FROM deletion_epoch WHERE id = 1) AS reset_generation
+            FROM conversations c
+            LEFT JOIN session_source_rev r ON r.session_id = c.session_id
+            WHERE (c.created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
+              AND c.role IN ('user', 'assistant')
+              AND c.content != ''
+              AND c.scope_known = TRUE AND c.project_id IS NULL
+            ORDER BY c.created_at ASC
+        """, d)
+        if rows:
+            print(f"   📋 chat_messages 为空，回退读 conversations 表：{len(rows)} 条")
+
+    return [dict(r) for r in rows]'''
+
+        if old5 in db_code:
+            db_code = db_code.replace(old5, new5, 1)
+            with open(DB_PY, "w", encoding="utf-8") as f:
+                f.write(db_code)
+            print("patch: database.py daypage fallback applied")
+        else:
+            print("patch: WARNING - cannot find database.py daypage fallback insertion point")
+    else:
+        print("patch: database.py already patched (daypage fallback), skipping")
+else:
+    print("patch: WARNING - database.py not found, skipping")
 
 print("patch: all done")
