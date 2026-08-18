@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目文件
 COPY . .
 
+# 应用客户端工具合并补丁
+RUN python patch_main.py
+
 # 默认端口 8080（与 .env.example 和 main.py 一致）
 ENV PORT=8080
 
