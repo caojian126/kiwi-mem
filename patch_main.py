@@ -38,10 +38,10 @@ if os.path.exists(MAIN_PY):
     # ========== Tool Call 模式（MCP 和/或 auto 搜索） ==========
     if openai_tools and is_stream:'''
 
-        if old1 in code:
-            code = code.replace(old1, new1, 1)
-        else:
-            print("patch: WARNING - cannot find main.py insertion point 1")
+        if old1 not in code:
+            print("patch: ERROR - cannot find main.py insertion point 1")
+            exit(1)
+        code = code.replace(old1, new1, 1)
 
         # ---- 编辑2a：工具分组加入 client_passthrough ----
         old2a = '        mcp_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") not in ("gateway_builtin", "drawer", "meta", "external_mcp")]'
@@ -49,10 +49,10 @@ if os.path.exists(MAIN_PY):
         new2a = '''        client_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") == "client_passthrough"]
         mcp_parsed = [p for p in parsed if tool_map.get(p["name"], {}).get("type") not in ("gateway_builtin", "drawer", "meta", "external_mcp", "client_passthrough")]'''
 
-        if old2a in code:
-            code = code.replace(old2a, new2a, 1)
-        else:
-            print("patch: WARNING - cannot find main.py insertion point 2a")
+        if old2a not in code:
+            print("patch: ERROR - cannot find main.py insertion point 2a")
+            exit(1)
+        code = code.replace(old2a, new2a, 1)
 
         # ---- 编辑2b：客户端工具调用处理 ----
         old2b = '        approved_categories = set()  # request-local; never infer from shared session state'
@@ -95,10 +95,10 @@ if os.path.exists(MAIN_PY):
         for _cp in client_parsed:
             tool_results[_cp["id"]] = "[client_tool] 此工具由客户端执行，已延迟。"'''
 
-        if old2b in code:
-            code = code.replace(old2b, new2b, 1)
-        else:
-            print("patch: WARNING - cannot find main.py insertion point 2b")
+        if old2b not in code:
+            print("patch: ERROR - cannot find main.py insertion point 2b")
+            exit(1)
+        code = code.replace(old2b, new2b, 1)
 
         with open(MAIN_PY, "w", encoding="utf-8") as f:
             f.write(code)
@@ -106,7 +106,8 @@ if os.path.exists(MAIN_PY):
     else:
         print("patch: main.py already patched, skipping")
 else:
-    print("patch: main.py not found, skipping")
+    print("patch: ERROR - main.py not found")
+    exit(1)
 
 
 # ============================================================
@@ -125,16 +126,16 @@ if os.path.exists(DIGEST_PY):
 
         new3 = '''                datetime.strptime(date_str + "T00:00:00+08:00", "%Y-%m-%dT%H:%M:%S%z"), cat_id  # fix_created_at_str'''
 
-        if old3 in digest_code:
+        if old3 not in digest_code:
+            print("patch: WARNING - cannot find daily_digest.py insertion point, skipping this fix")
+        else:
             digest_code = digest_code.replace(old3, new3, 1)
             with open(DIGEST_PY, "w", encoding="utf-8") as f:
                 f.write(digest_code)
             print("patch: daily_digest.py patched successfully (created_at fix)")
-        else:
-            print("patch: WARNING - cannot find daily_digest.py insertion point")
     else:
         print("patch: daily_digest.py already patched, skipping")
 else:
-    print("patch: daily_digest.py not found, skipping")
+    print("patch: WARNING - daily_digest.py not found, skipping this fix")
 
 print("patch: all done")
