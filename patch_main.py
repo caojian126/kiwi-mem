@@ -163,8 +163,8 @@ if os.path.exists(DB_PY):
         db_code = f.read()
 
     if "fix_daypage_fallback" not in db_code:
-        # 匹配 get_chat_messages_for_date 函数末尾：查询返回空时不回退，直接返回空列表
-        # 在 return 前插入回退逻辑
+        # 匹配 get_chat_messages_for_date 函数的 return 语句
+        # 原代码在 async with 块外 return，回退查询需要重新获取连接
         old5 = '''              AND c.project_id IS NULL
             ORDER BY m.time ASC
         """, d)
@@ -176,18 +176,19 @@ if os.path.exists(DB_PY):
 
     # fix_daypage_fallback: chat_messages 表为空时回退读 conversations 事件账本
     if not rows:
-        rows = await conn.fetch("""
-            SELECT c.role, c.content, c.created_at AS time, c.session_id AS conversation_id,
-                   COALESCE(r.rev, 0) AS source_rev,
-                   (SELECT reset_generation FROM deletion_epoch WHERE id = 1) AS reset_generation
-            FROM conversations c
-            LEFT JOIN session_source_rev r ON r.session_id = c.session_id
-            WHERE (c.created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
-              AND c.role IN ('user', 'assistant')
-              AND c.content != ''
-              AND c.scope_known = TRUE AND c.project_id IS NULL
-            ORDER BY c.created_at ASC
-        """, d)
+        async with pool.acquire() as conn2:
+            rows = await conn2.fetch("""
+                SELECT c.role, c.content, c.created_at AS time, c.session_id AS conversation_id,
+                       COALESCE(r.rev, 0) AS source_rev,
+                       (SELECT reset_generation FROM deletion_epoch WHERE id = 1) AS reset_generation
+                FROM conversations c
+                LEFT JOIN session_source_rev r ON r.session_id = c.session_id
+                WHERE (c.created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
+                  AND c.role IN ('user', 'assistant')
+                  AND c.content != ''
+                  AND c.scope_known = TRUE AND c.project_id IS NULL
+                ORDER BY c.created_at ASC
+            """, d)
         if rows:
             print(f"   📋 chat_messages 为空，回退读 conversations 表：{len(rows)} 条")
 
